@@ -17,22 +17,22 @@ use std::fmt::Write;
 
 #[derive(Debug)]
 pub struct TwiddlerConfig {
-    key_repeat: bool,
-    direct_key: bool,
-    joystick_left_click: bool,
-    disable_bluetooth: bool,
-    sticky_num: bool,
-    sticky_shift: bool,
-    haptic_feedback: bool,
+    pub key_repeat: bool,
+    pub direct_key: bool,
+    pub joystick_left_click: bool,
+    pub disable_bluetooth: bool,
+    pub sticky_num: bool,
+    pub sticky_shift: bool,
+    pub haptic_feedback: bool,
 
-    sleep_timeout: u16,
-    mouse_left_click_action: u16,
-    mouse_middle_click_action: u16,
-    mouse_right_click_action: u16,
-    mouse_accel_factor: u8,
-    key_repeat_delay: u8,
+    pub sleep_timeout: u16,
+    pub mouse_left_click_action: u16,
+    pub mouse_middle_click_action: u16,
+    pub mouse_right_click_action: u16,
+    pub mouse_accel_factor: u8,
+    pub key_repeat_delay: u8,
 
-    chords: Vec<RawChord>,
+    pub chords: Vec<RawChord>,
 }
 
 impl TwiddlerConfig {
@@ -67,8 +67,8 @@ pub enum ChordOutput {
 
 #[derive(Debug)]
 pub struct RawChord {
-    keys: Vec<u16>,
-    output: ChordOutput,
+    pub keys: Vec<u16>,
+    pub output: ChordOutput,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -471,7 +471,7 @@ fn generate_text_for_keys(keys: &[u16]) -> String {
     result
 }
 
-fn text_to_usb(s: &str) -> ChordOutput {
+pub fn text_to_usb(s: &str) -> ChordOutput {
     let outputs = text_to_usb_internal(s);
     match outputs.len() {
         0 => panic!("Empty chord?"),
@@ -587,7 +587,7 @@ fn usb_hid_to_text(shift: bool, n: u8) -> (bool, String) {
     }
 }
 
-fn generate_text_config(config: &TwiddlerConfig) -> Vec<String> {
+pub fn generate_text_config(config: &TwiddlerConfig) -> Vec<String> {
     let mut result = Vec::new();
 
     result.push("version 0".to_string());
