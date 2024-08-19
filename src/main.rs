@@ -5,28 +5,23 @@
 // licensed under GPLv3
 
 use std::env;
+use std::error::Error;
 
 use twidlk_rust::twiddler_config::{txt_to_cfg, cfg_to_txt};
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let filename = match args.get(1) {
         Some(f) => f,
-        None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Requires a filename as argument")),
+        None => return Err("No filename provided".into()),
     };
 
     let input_is_text = filename.ends_with(".txt");
 
     if input_is_text {
-        match txt_to_cfg(filename) {
-            Ok(_) => {},
-            Err(e) => return Err(e),
-        }
+        txt_to_cfg(&filename)?;
     } else {
-        match cfg_to_txt(filename) {
-            Ok(_) => {},
-            Err(e) => return Err(e),
-        }
+        cfg_to_txt(&filename)?;
     }
     Ok(())
 }
