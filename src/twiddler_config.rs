@@ -485,6 +485,10 @@ pub fn read_text_config(contents: String) -> Result<TwiddlerConfig, Box<dyn Erro
             Err(e) => return Err(e),
         }
     }
+
+    // sort chords by key_list_to_int--this is important! the config file won't be accepted otherwise.
+    sort_chords(&mut config.chords);
+    
     Ok(config)
 }
 
@@ -639,13 +643,22 @@ fn text_to_usb_internal(s: String) -> Result<Vec<ChordOutput>, Box<dyn Error>> {
     let mut result = Vec::new();
     let mut chars = s.chars().peekable();
 
+    fn shifted_with_default_to_mods(shifted: Option<bool>, default: bool) -> u8 {
+        let actually_shifted = match shifted {
+            Some(v) => v,
+            None => default,
+        };
+        if actually_shifted { 0x20 } else { 0x00 }
+    }
+
     while let Some(c1) = chars.next() {
         let c2_opt = chars.peek();
         match (c1, c2_opt) {
             ('\\', Some(_)) => {
                 // the unwrap here is safe because c2 is Some.
                 // since c2 was only peeked before, it's necessary to call next() to actually consume it.
-                let (modifier, key_code) = unmap_char(&chars.next().unwrap().to_string(), false)?;
+                let (shifted, key_code) = unmap_char(&chars.next().unwrap().to_string())?;
+                let modifier = shifted_with_default_to_mods(shifted, false);
                 result.push(ChordOutput::SingleChord { modifier, key_code });
             }
             ('<', Some(_)) => {
@@ -658,12 +671,13 @@ fn text_to_usb_internal(s: String) -> Result<Vec<ChordOutput>, Box<dyn Error>> {
                 }
                 let (mods, char_content) = parse_value_modifiers(&content);
                 let shift = mods & 0x22 != 0;
-                let (parsed_shift, key_code) = unmap_char(char_content, shift)?;
-                // i'm not sure if the former should be { parsed_shift | mods | 0x20 } or just { mods | 0x20 }
-                result.push(ChordOutput::SingleChord { modifier: if shift { mods | 0x20 } else { parsed_shift | mods }, key_code });
+                let (parsed_shift, key_code) = unmap_char(char_content)?;
+                let modifier = mods | shifted_with_default_to_mods(parsed_shift, shift);
+                result.push(ChordOutput::SingleChord { modifier, key_code });
             }
             _ => {
-                let (modifier, key_code) = unmap_char(&c1.to_string(), false)?;
+                let (parsed_shift, key_code) = unmap_char(&c1.to_string())?;
+                let modifier = shifted_with_default_to_mods(parsed_shift, false);
                 result.push(ChordOutput::SingleChord { modifier, key_code });
             }
         }
@@ -701,7 +715,8 @@ fn parse_value_modifiers(s: &str) -> (u8, &str) {
     (mods, "")
 }
 
-fn unmap_char(s_raw: &str, shift: bool) -> Result<(u8, u8), Box<dyn Error>> {
+
+pub fn unmap_char(s_raw: &str) -> Result<(Option<bool>, u8), Box<dyn Error>> {
     let s = if s_raw.len() == 1 { s_raw } else { &("<".to_string() + s_raw + ">") };
     let (shifted, key_code) = match {
         let v = USB_HID_UNMAP.get(s);
@@ -709,20 +724,20 @@ fn unmap_char(s_raw: &str, shift: bool) -> Result<(u8, u8), Box<dyn Error>> {
         }
         .map(|&(shift1, _shift2, code)| {
             match shift1 {
-                Shifted::Shifted => (true, code),
-                Shifted::Unshifted => (false, code),
-                Shifted::ShiftAgnostic => (shift, code),
+                Shifted::Shifted => (Some(true), code),
+                Shifted::Unshifted => (Some(false), code),
+                Shifted::ShiftAgnostic => (None, code),
             }
         }) {
             Some(v) => v,
             None => return Err(Box::new(TwiddlerConfigError::StringNotInStringContents(s.to_string()))),
         };
-
-    let modifier: u8 = if shifted { 0x20 } else { 0 };
-    Ok((modifier, key_code))
+    Ok((shifted, key_code))
 }
 
-fn usb_hid_to_text(shift: bool, n: u8) -> (bool, String) {
+
+
+pub fn usb_hid_to_text(shift: bool, n: u8) -> (bool, String) {
     let shift_state = if shift { Shifted::Shifted } else { Shifted::Unshifted };
     
     if let Some((shift_agnostic, value)) = USB_HID_MAP.get(&(shift_state, n)) {
@@ -744,7 +759,7 @@ fn usb_hid_to_text(shift: bool, n: u8) -> (bool, String) {
     }
 }
 
-pub fn generate_text_config(config: &TwiddlerConfig) -> Result<Vec<String>, Box<dyn Error>> {
+pub fn generate_text_config(config: &TwiddlerConfig) -> Result<String, Box<dyn Error>> {
     let mut result = Vec::new();
 
     for flag_field in FlagField::VARIANTS.iter() {
@@ -771,7 +786,7 @@ pub fn generate_text_config(config: &TwiddlerConfig) -> Result<Vec<String>, Box<
             render_chord_output(&chord.output)?
         ));
     }
-    Ok(result)
+    Ok(result.join("\n") + "\n")
 }
 
 fn bool_to_int(b: bool) -> i32 {
@@ -835,7 +850,7 @@ fn render_modifiers(m: u8) -> String {
     result
 }
 
-fn generate_bin_config(config: &TwiddlerConfig) -> Result<Vec<u8>, Box<dyn Error>> {
+pub fn generate_bin_config(config: &TwiddlerConfig) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut writer = Cursor::new(Vec::new());
 
     // Write version (only compatible with v5)
@@ -919,9 +934,17 @@ fn generate_bin_config(config: &TwiddlerConfig) -> Result<Vec<u8>, Box<dyn Error
     Ok(writer.into_inner())
 }
 
+fn key_list_to_int(keys: &[u16]) -> u16 {
+    keys.iter().fold(0, |acc, &key| acc | (1 << key))
+}
+
+pub fn sort_chords(chords: &mut Vec<RawChord>) {
+    // sort chords by key_list_to_int--this is important! the config file won't be accepted otherwise.
+    chords.sort_by_key(|c| key_list_to_int(&c.keys));
+}
+
 fn write_chord<W: WriteBytesExt>(writer: &mut W, chord: &RawChord) -> std::io::Result<()> {
-    let keys_int: u16 = chord.keys.iter().fold(0, |acc, &key| acc | (1 << key));
-    writer.write_u16::<LittleEndian>(keys_int)?;
+    writer.write_u16::<LittleEndian>(key_list_to_int(&chord.keys))?;
     write_chord_output(writer, &chord.output)
 }
 
@@ -991,6 +1014,6 @@ pub fn cfg_to_txt(filename: &str) -> Result<String, Box<dyn Error>> {
     let new_filename = create_filename(filename, "txt")?;
     check_overwrite(filename, &new_filename)?;
     let config = read_config(&contents)?;
-    fs::write(&new_filename, generate_text_config(&config)?.join("\n") + "\n")?;
+    fs::write(&new_filename, generate_text_config(&config)?)?;
     Ok(new_filename)
 }
