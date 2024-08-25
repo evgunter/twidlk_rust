@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::twiddler_config::{txt_to_cfg, cfg_to_txt};
+use crate::{twiddler_config::{cfg_to_txt, text_to_usb, txt_to_cfg, usb_hid_to_text}, ChordOutput::SingleChord};
 
 struct TempFile {
     path: String,
@@ -53,4 +53,53 @@ fn test_nodedupe_cfg_to_txt() {
     let new_txt = std::fs::read_to_string(new_txt_path.path()).unwrap();
     let original_txt = std::fs::read_to_string(TXT_PATH).unwrap();
     assert_eq!(new_txt, original_txt);
+}
+
+#[test]
+fn raw_key_code() {
+    let (mods, key_code) = match text_to_usb("<keycode 0x3F>".to_owned()) {
+        Ok(SingleChord {modifier, key_code}) => (modifier, key_code),
+        Err(v) => {
+            assert!(false, "{:?}", v);
+            (0x00, 0)  // to make it type check
+        },
+        Ok(v) => {
+            assert!(false, "{:?}", v);
+            (0x00, 0)  // to make it type check
+        },
+    };
+    assert_eq!(mods, 0x00);
+    assert_eq!(key_code, 0x3F);
+
+    let (mods, key_code) = match text_to_usb("<space>".to_owned()) {
+        Ok(SingleChord {modifier, key_code}) => (modifier, key_code),
+        Err(v) => {
+            assert!(false, "{:?}", v);
+            (0x00, 0)  // to make it type check
+        },
+        Ok(v) => {
+            assert!(false, "{:?}", v);
+            (0x00, 0)  // to make it type check
+        },
+    };
+    assert_eq!(mods, 0x00);
+    assert_eq!(key_code, 0x2C);
+
+    let (shifted, txt) = usb_hid_to_text(true, 0x00);  // key code not in USB_HID_TABLE
+    assert_eq!(shifted, true);
+    assert_eq!(txt, "<keycode 0x00>");
+    let (shifted, txt) = usb_hid_to_text(false, 0xFF);  // key code not in USB_HID_TABLE
+    assert_eq!(shifted, false);
+    assert_eq!(txt, "<keycode 0xFF>");
+
+    let (shifted, txt) = usb_hid_to_text(true, 0x2C);
+    assert_eq!(shifted, true);
+    assert_eq!(txt, "<space>");
+
+    let (_, txt) = usb_hid_to_text(true, 0x04);
+    assert_eq!(txt, "A");
+
+    let (_, txt) = usb_hid_to_text(false, 0x1E);
+    assert_eq!(txt, "1");
+
 }

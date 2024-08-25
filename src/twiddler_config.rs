@@ -669,9 +669,16 @@ fn text_to_usb_internal(s: String) -> Result<Vec<ChordOutput>, Box<dyn Error>> {
                     }
                     content.push(next_char);
                 }
+
                 let (mods, char_content) = parse_value_modifiers(&content);
                 let shift = mods & 0x22 != 0;
-                let (parsed_shift, key_code) = unmap_char(char_content)?;
+                let (parsed_shift, key_code) = {
+                    if char_content.starts_with("keycode 0x") {
+                        (None, u8::from_str_radix(&char_content[10..char_content.len()], 16)?)
+                    } else {
+                        unmap_char(char_content)?
+                    }
+                };
                 let modifier = mods | shifted_with_default_to_mods(parsed_shift, shift);
                 result.push(ChordOutput::SingleChord { modifier, key_code });
             }
@@ -718,17 +725,15 @@ fn parse_value_modifiers(s: &str) -> (u8, &str) {
 
 pub fn unmap_char(s_raw: &str) -> Result<(Option<bool>, u8), Box<dyn Error>> {
     let s = if s_raw.len() == 1 { s_raw } else { &("<".to_string() + s_raw + ">") };
-    let (shifted, key_code) = match {
-        let v = USB_HID_UNMAP.get(s);
-        v
+
+    let unmapped = USB_HID_UNMAP.get(s).map(|&(shift1, _shift2, code)| {
+        match shift1 {
+            Shifted::Shifted => (Some(true), code),
+            Shifted::Unshifted => (Some(false), code),
+            Shifted::ShiftAgnostic => (None, code),
         }
-        .map(|&(shift1, _shift2, code)| {
-            match shift1 {
-                Shifted::Shifted => (Some(true), code),
-                Shifted::Unshifted => (Some(false), code),
-                Shifted::ShiftAgnostic => (None, code),
-            }
-        }) {
+    });
+    let (shifted, key_code) = match unmapped {
             Some(v) => v,
             None => return Err(Box::new(TwiddlerConfigError::StringNotInStringContents(s.to_string()))),
         };
@@ -755,7 +760,7 @@ pub fn usb_hid_to_text(shift: bool, n: u8) -> (bool, String) {
         };
         (output_shift, value.clone())
     } else {
-        (shift, format!("<0x{:02X}>", n))
+        (shift, format!("<keycode 0x{:02X}>", n))
     }
 }
 
