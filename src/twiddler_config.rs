@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Cursor};
-use std::fmt::Write;
+use std::fmt::{Write, Display, Formatter};
 use std::error::Error;
 use strum::VariantArray;
 use strum_macros::VariantArray;
@@ -37,7 +37,7 @@ pub struct TwiddlerConfig {
     pub mouse_accel_factor: u8,
     pub key_repeat_delay: u8,
 
-    pub chords: Vec<RawChord>,
+    pub chords: Vec<ChordWithOutput>,
 }
 
 impl TwiddlerConfig {
@@ -72,8 +72,75 @@ pub enum ChordOutput {
 }
 
 #[derive(Debug)]
-pub struct RawChord {
+pub struct Chord {
     pub keys: Vec<u16>,
+}
+
+impl Chord {
+    fn new() -> Self {
+        Chord { keys: Vec::new() }
+    }
+
+    fn union(&mut self, other: Chord) {
+        self.keys.extend(other.keys);
+    }
+}
+
+impl Display for Chord {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut modifiers_text = String::new();
+        // Generate modifiers
+        if self.keys.contains(&0) { modifiers_text.push('N'); }
+        if self.keys.contains(&4) { modifiers_text.push('A'); }
+        if self.keys.contains(&8) { modifiers_text.push('C'); }
+        if self.keys.contains(&12) { modifiers_text.push('S'); }
+
+        if !modifiers_text.is_empty() {
+            modifiers_text.push('+');
+        }
+
+        for _ in 0..(5 - modifiers_text.len()) {
+            write!(f, " ")?;
+        }
+
+        write!(f, "{}", modifiers_text)?;
+
+        // Generate main chord
+        for row in 0..4 {
+            let row_keys: Vec<_> = self.keys.iter()
+                .filter(|&&k| k > 4 * row && k < 4 * (row + 1))
+                .map(|&k| k - 4 * row)
+                .collect();
+
+            if row_keys.is_empty() {
+                write!(f, "O")?;
+            } else if row_keys.len() == 1 {
+                write!(f, "{}", match row_keys[0] {
+                    1 => 'L',
+                    2 => 'M',
+                    3 => 'R',
+                    _ => unreachable!(),
+                })?;
+            } else {
+                write!(f, "(")?;
+                for &k in &row_keys {
+                    write!(f, "{}", match k {
+                        1 => 'L',
+                        2 => 'M',
+                        3 => 'R',
+                        _ => unreachable!(),
+                    })?;
+                }
+                write!(f, ")")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ChordWithOutput {
+    pub chord: Chord,
     pub output: ChordOutput,
 }
 
@@ -221,8 +288,8 @@ enum TwiddlerConfigError {
     InvalidKey(String),
 }
 
-impl std::fmt::Display for ReadTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for ReadTypeError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             ReadTypeError::InvalidBoolean(s) => write!(f, "InvalidBoolean: '{}'", s),
         }
@@ -232,8 +299,8 @@ impl Error for ReadTypeError {}
 
 
 
-impl std::fmt::Display for TwiddlerConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for TwiddlerConfigError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             TwiddlerConfigError::NestedMultipleChord => write!(f, "NestedMultipleChord"),
             TwiddlerConfigError::ReadType(e) => write!(f, "ReadTypeError: {}", e),
@@ -374,15 +441,12 @@ fn read_chord_mapping<R: Read>(reader: &mut R) -> std::io::Result<ChordOutput> {
     })
 }
 
-fn read_chord<R: Read>(reader: &mut R) -> std::io::Result<RawChord> {
+fn read_chord<R: Read>(reader: &mut R) -> std::io::Result<ChordWithOutput> {
     let raw_keys = reader.read_u16::<LittleEndian>()?;
-    let keys: Vec<u16> = (0..16)
-        .filter(|&i| raw_keys & (1 << i) != 0)
-        .collect();
+    let chord: Chord = Chord { keys: (0..16).filter(|&i| raw_keys & (1 << i) != 0).collect() };
+    let output = read_chord_mapping(reader)?;
 
-    let chord = read_chord_mapping(reader)?;
-
-    Ok(RawChord { keys, output: chord })
+    Ok(ChordWithOutput { chord, output })
 }
 
 fn read_location<R: Read>(reader: &mut R) -> std::io::Result<u32> {
@@ -456,12 +520,12 @@ pub fn read_config(contents: &[u8]) -> std::io::Result<TwiddlerConfig> {
         string_locations.push(read_location(&mut cursor)?);
     }
 
-    let chords: std::io::Result<Vec<RawChord>> = chords.into_iter()
+    let chords: std::io::Result<Vec<ChordWithOutput>> = chords.into_iter()
         .map(|chord| {
             match chord.output {
                 ChordOutput::MultipleChordIndex { string_index } => {
                     let multiple_chord = read_string_contents(contents, string_locations[string_index as usize] as usize)?;
-                    Ok(RawChord { keys: chord.keys, output: ChordOutput::MultipleChord(multiple_chord) })
+                    Ok(ChordWithOutput { chord: chord.chord, output: ChordOutput::MultipleChord(multiple_chord) })
                 },
                 _ => Ok(chord),
             }
@@ -508,14 +572,14 @@ fn read_bool(s: String) -> Result<bool, Box<dyn Error>> {
     }
 }
 
-fn parse_chord(key: String, value: String) -> Result<RawChord, Box<dyn Error>> {
-    Ok(RawChord {
-        keys: parse_chord_keys(key)?,
+fn parse_chord(key: String, value: String) -> Result<ChordWithOutput, Box<dyn Error>> {
+    Ok(ChordWithOutput {
+        chord: parse_chord_keys(key)?,
         output: text_to_usb(value)?,
     })
 }
 
-fn parse_chord_modifiers(s: String) -> Result<Vec<u16>, Box<dyn Error>> {
+fn parse_chord_modifiers(s: String) -> Result<Chord, Box<dyn Error>> {
     let mut chord_modifiers = Vec::new();
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -527,7 +591,7 @@ fn parse_chord_modifiers(s: String) -> Result<Vec<u16>, Box<dyn Error>> {
              _  => return Err(Box::new(TwiddlerConfigError::UnknownChordModifier(c))),
         }
     }
-    Ok(chord_modifiers)
+    Ok(Chord { keys: chord_modifiers })
 }
 
 fn parse_letter(c: char) -> Result<Option<u16>, Box<dyn Error>> {
@@ -540,8 +604,8 @@ fn parse_letter(c: char) -> Result<Option<u16>, Box<dyn Error>> {
     })
 }
 
-fn parse_main_chord(s: String) -> Result<Vec<u16>, Box<dyn Error>> {
-    let mut chord: Vec<u16> = Vec::new();
+fn parse_main_chord(s: String) -> Result<Chord, Box<dyn Error>> {
+    let mut chord: Chord = Chord::new();
     let mut chars = s.chars();
     let mut col_idx = 0;
     while let Some(c) = chars.next() {
@@ -551,13 +615,13 @@ fn parse_main_chord(s: String) -> Result<Vec<u16>, Box<dyn Error>> {
                     break;
                 }
                 if let Some(lc) = parse_letter(c)? {
-                    chord.push(4*col_idx + lc);
+                    chord.keys.push(4*col_idx + lc);
                 }
             }
             col_idx += 1;
         } else {
             if let Some(lc) = parse_letter(c)? {
-                chord.push(4*col_idx + lc);
+                chord.keys.push(4*col_idx + lc);
             }
             col_idx += 1;
         }
@@ -565,13 +629,13 @@ fn parse_main_chord(s: String) -> Result<Vec<u16>, Box<dyn Error>> {
     Ok(chord)
 }
 
-fn parse_chord_keys(mut s: String) -> Result<Vec<u16>, Box<dyn Error>> {
+fn parse_chord_keys(mut s: String) -> Result<Chord, Box<dyn Error>> {
     match s.find('+') {
         Some(i) => {
             let main_chord = s.split_off(i+1);  // s is now left with only the modifiers and "+"
             s.pop();  // get rid of the "+"
             let mut p = parse_chord_modifiers(s)?;
-            p.extend(parse_main_chord(main_chord)?);
+            p.union(parse_main_chord(main_chord)?);
             Ok(p)
         }
         None => parse_main_chord(s),
@@ -579,56 +643,6 @@ fn parse_chord_keys(mut s: String) -> Result<Vec<u16>, Box<dyn Error>> {
 }
 
 // === Writing ===
-
-fn generate_text_for_keys(keys: &[u16]) -> String {
-    let mut result = String::new();
-    
-    // Generate modifiers
-    if keys.contains(&0) { result.push('N'); }
-    if keys.contains(&4) { result.push('A'); }
-    if keys.contains(&8) { result.push('C'); }
-    if keys.contains(&12) { result.push('S'); }
-    
-    if !result.is_empty() {
-        result.push('+');
-    }
-    
-    while result.len() < 5 {
-        result.insert(0, ' ');
-    }
-    
-    // Generate main chord
-    for row in 0..4 {
-        let row_keys: Vec<_> = keys.iter()
-            .filter(|&&k| k > 4 * row && k < 4 * (row + 1))
-            .map(|&k| k - 4 * row)
-            .collect();
-        
-        if row_keys.is_empty() {
-            result.push('O');
-        } else if row_keys.len() == 1 {
-            result.push(match row_keys[0] {
-                1 => 'L',
-                2 => 'M',
-                3 => 'R',
-                _ => unreachable!(),
-            });
-        } else {
-            result.push('(');
-            for &k in &row_keys {
-                result.push(match k {
-                    1 => 'L',
-                    2 => 'M',
-                    3 => 'R',
-                    _ => unreachable!(),
-                });
-            }
-            result.push(')');
-        }
-    }
-    
-    result
-}
 
 pub fn text_to_usb(s: String) -> Result<ChordOutput, Box<dyn Error>> {
     let outputs = text_to_usb_internal(s)?;
@@ -787,7 +801,7 @@ pub fn generate_text_config(config: &TwiddlerConfig) -> Result<String, Box<dyn E
         }
 
         result.push(format!("{} {}", 
-            generate_text_for_keys(&chord.keys), 
+            &chord.chord,
             render_chord_output(&chord.output)?
         ));
     }
@@ -939,17 +953,17 @@ pub fn generate_bin_config(config: &TwiddlerConfig) -> Result<Vec<u8>, Box<dyn E
     Ok(writer.into_inner())
 }
 
-fn key_list_to_int(keys: &[u16]) -> u16 {
-    keys.iter().fold(0, |acc, &key| acc | (1 << key))
+fn key_list_to_int(chord: &Chord) -> u16 {
+    chord.keys.iter().fold(0, |acc, &key| acc | (1 << key))
 }
 
-pub fn sort_chords(chords: &mut Vec<RawChord>) {
+pub fn sort_chords(chords: &mut Vec<ChordWithOutput>) {
     // sort chords by key_list_to_int--this is important! the config file won't be accepted otherwise.
-    chords.sort_by_key(|c| key_list_to_int(&c.keys));
+    chords.sort_by_key(|c| key_list_to_int(&c.chord));
 }
 
-fn write_chord<W: WriteBytesExt>(writer: &mut W, chord: &RawChord) -> std::io::Result<()> {
-    writer.write_u16::<LittleEndian>(key_list_to_int(&chord.keys))?;
+fn write_chord<W: WriteBytesExt>(writer: &mut W, chord: &ChordWithOutput) -> std::io::Result<()> {
+    writer.write_u16::<LittleEndian>(key_list_to_int(&chord.chord))?;
     write_chord_output(writer, &chord.output)
 }
 
